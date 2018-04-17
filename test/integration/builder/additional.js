@@ -100,13 +100,13 @@ module.exports = function(knex) {
 
       it('should work using camelCased table name', () => {
         return knex('testTableTwo').columnInfo().then(res => {
-          expect(Object.keys(res)).to.eql(['id', 'accountId', 'details', 'status', 'jsonData']);
+          expect(Object.keys(res)).to.have.all.members(['id', 'accountId', 'details', 'status', 'jsonData']);
         });
       });
 
       it('should work using snake_cased table name', () => {
         return knex('test_table_two').columnInfo().then(res => {
-          expect(Object.keys(res)).to.eql(['id', 'accountId', 'details', 'status', 'jsonData']);
+          expect(Object.keys(res)).to.have.all.members(['id', 'accountId', 'details', 'status', 'jsonData']);
         });
       });
 
@@ -175,18 +175,19 @@ module.exports = function(knex) {
           // Insert new data after truncate and make sure ids restart at 1.
           // This doesn't currently work on oracle, where the created sequence
           // needs to be manually reset.
-          if (knex.client.dialect !== 'oracle') {
-            return knex('test_table_two').insert({ status: 1 })
-              .then(res => {
-                return knex('test_table_two')
-                  .select('id')
-                  .first()
-                  .then(res => {
-                    expect(res).to.be.an('object')
-                    expect(res.id).to.equal(1);
-                  });
-              });
-          }
+          // On redshift, one would need to create an entirely new table and do
+          //  `insert into ... (select ...); alter table rename...`
+          if (/oracle/i.test(knex.client.dialect) || /redshift/i.test(knex.client.dialect)) { return; }
+          return knex('test_table_two').insert({ status: 1 })
+            .then(res => {
+              return knex('test_table_two')
+                .select('id')
+                .first()
+                .then(res => {
+                  expect(res).to.be.an('object')
+                  expect(res.id).to.equal(1);
+                });
+            });
         });
     });
 
@@ -664,6 +665,8 @@ module.exports = function(knex) {
     });
 
     it('Event: start', function() {
+      // On redshift, cannot set an identity column to a value
+      if (/redshift/i.test(knex.client.dialect)) { return; }
       return knex('accounts')
         .insert({id: '999', last_name: 'Start'})
         .then(function() {
@@ -684,6 +687,27 @@ module.exports = function(knex) {
           expect(String(row.id)).to.equal('999');
           expect(row.last_name).to.equal('Start');
         });
+    });
+
+    it('Event \'query\' should not emit native sql string', function() {
+      var builder = knex('accounts')
+        .where('id', 1)
+        .select();
+
+      builder
+        .on('query', function(obj) {
+          var native = builder.toSQL().toNative().sql;
+          var sql = builder.toSQL().sql;
+
+          //Only assert if they diff to begin with.
+          //IE Maria does not diff
+          if(native !== sql) {
+            expect(obj.sql).to.not.equal(builder.toSQL().toNative().sql);
+            expect(obj.sql).to.equal(builder.toSQL().sql);
+          }
+        });
+
+      return builder;
     });
 
   });
